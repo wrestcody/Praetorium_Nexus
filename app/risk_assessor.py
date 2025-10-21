@@ -1,3 +1,10 @@
+# AI Logic Review Statement:
+# The logic in this file is responsible for prioritizing compliance findings.
+# It uses a predefined severity order to sort findings based on the
+# 'refined_risk_score' provided by the upstream Vanguard_Agent.
+# This ensures that the most critical risks are surfaced to the top
+# in any visualization or reporting layer.
+
 from typing import List
 from . import database
 
