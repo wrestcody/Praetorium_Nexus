@@ -1,8 +1,11 @@
+import os
 from fastapi import Security, HTTPException, status
 from fastapi.security import APIKeyHeader
 
 API_KEY_NAME = "X-API-Key"
-API_KEY = "supersecretapikey"  # In a real application, this would be stored securely
+# Read the API key from an environment variable for secure deployment.
+# A default is provided for local testing convenience.
+API_KEY = os.getenv("NEXUS_API_KEY", "supersecretapikey")
 
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
