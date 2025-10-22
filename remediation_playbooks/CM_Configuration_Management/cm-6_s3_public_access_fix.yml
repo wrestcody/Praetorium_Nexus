@@ -1,0 +1,35 @@
+description: |
+  **Praetorium_Nexus Playbook: CM-6 (S3 Public Access)**
+  This document automatically remediates S3 buckets that fail the
+  NIST 800-53 CM-6 check for "Block Public Access".
+  It enforces the PublicAccessBlock configuration.
+schemaVersion: '0.3'
+assumeRole: '{{ AutomationAssumeRole }}' # This role will be passed by the triggering resource
+parameters:
+  BucketName:
+    type: String
+    description: (Required) The name of the S3 bucket to remediate.
+  AutomationAssumeRole:
+    type: String
+    description: (Required) The ARN of the IAM role for SSM to assume.
+mainSteps:
+  - name: EnforcePublicAccessBlock
+    action: 'aws:executeAwsApi'
+    description: |
+      Applies the 'Block all public access' configuration
+      to the target S3 bucket.
+    timeoutSeconds: 60
+    isEnd: true
+    inputs:
+      Service: s3
+      Api: PutPublicAccessBlock
+      Bucket: '{{ BucketName }}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+    outputs:
+      - Name: Response
+        Selector: '$'
+        Type: StringMap
