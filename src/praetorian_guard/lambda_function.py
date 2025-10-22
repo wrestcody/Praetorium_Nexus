@@ -8,11 +8,16 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 SSM_CLIENT = boto3.client("ssm")
 
 # This mapping is the core logic.
-# It maps a failed Control ID to its corresponding SSM Automation Document.
+# It maps a Control ID to its required SSM playbook and Execution Role ARN
 REMEDIATION_PLAYBOOK_MAP = {
-    "NIST-800-53-CM-6": "PraetoriumNexus-CM-6-S3-Public-Access-Fix",
-    # Add other control-to-playbook mappings here
-    # "NIST-800-53-AC-2": "PraetoriumNexus-AC-2-IAM-User-Cleanup",
+    "NIST-800-53-CM-6": {
+        "DocumentName": "PraetoriumNexus-CM-6-S3-Public-Access-Fix",
+        "RoleEnvVar": "CM6_S3_EXECUTION_ROLE_ARN"
+    },
+    # "NIST-800-53-AC-2": {
+    #     "DocumentName": "PraetoriumNexus-AC-2-IAM-User-Cleanup",
+    #     "RoleEnvVar": "AC2_IAM_EXECUTION_ROLE_ARN"
+    # },
 }
 
 # --- Logging ---
@@ -22,36 +27,39 @@ logger.setLevel(LOG_LEVEL)
 def lambda_handler(event, context):
     """
     Handles SQS messages from KSI_Engine containing CCE payloads.
-    Parses the payload and triggers the correct remediation playbook.
+    Parses the payload and triggers the correct remediation playbook
+    using its specific, least-privilege IAM role.
     """
     logger.info(f"Received {len(event.get('Records', []))} event record(s).")
 
     for record in event.get("Records", []):
         try:
             cce_payload = json.loads(record.get("body", "{}"))
-
-            # Log CCE payload for auditability
             logger.info(f"Processing CCE payload: {json.dumps(cce_payload)}")
 
             control_id = cce_payload.get("control_id")
             target_id = cce_payload.get("target_id")
             status = cce_payload.get("status")
 
-            # Only act on "FAIL" status
             if status != "FAIL":
                 logger.info(f"Skipping payload for {target_id} with status '{status}'. No action needed.")
                 continue
 
-            # Find the correct playbook
-            playbook_name = REMEDIATION_PLAYBOOK_MAP.get(control_id)
-            if not playbook_name:
+            # --- Find the correct playbook and its execution role ---
+            playbook_info = REMEDIATION_PLAYBOOK_MAP.get(control_id)
+            if not playbook_info:
                 logger.error(f"No remediation playbook found for control_id '{control_id}'. Cannot remediate.")
                 continue
 
-            # Get the target parameter (e.g., S3 Bucket ARN)
-            # The target_id is often the resource ARN. The playbook will need
-            # a specific parameter, like just the bucket name.
-            # For S3 ARN: "arn:aws:s3:::<bucket-name>"
+            playbook_name = playbook_info["DocumentName"]
+            role_env_var = playbook_info["RoleEnvVar"]
+            automation_assume_role_arn = os.environ.get(role_env_var)
+
+            if not automation_assume_role_arn:
+                logger.error(f"Environment variable '{role_env_var}' not set for playbook '{playbook_name}'. Cannot execute.")
+                continue
+            # --- End role lookup ---
+
             if target_id and target_id.startswith("arn:aws:s3:::"):
                 target_param = {"BucketName": [target_id.split(":::")[-1]]}
             else:
@@ -63,7 +71,10 @@ def lambda_handler(event, context):
             # --- AUTOMATED ENFORCEMENT (KSI-CNA-08) ---
             response = SSM_CLIENT.start_automation_execution(
                 DocumentName=playbook_name,
-                Parameters=target_param,
+                Parameters={
+                    **target_param,
+                    "AutomationAssumeRole": [automation_assume_role_arn] # Pass the execution role
+                },
                 Tags=[
                     {"Key": "TriggeredBy", "Value": "Praetorian_Guard_Lambda"},
                     {"Key": "ControlID", "Value": control_id},
@@ -78,9 +89,6 @@ def lambda_handler(event, context):
             logger.error(f"Failed to decode SQS message body: {record.get('body')}")
         except Exception as e:
             logger.error(f"Error processing record: {e}", exc_info=True)
-            # Do not re-raise, as this would cause the SQS message to be re-processed indefinitely.
-            # The SQS queue should be configured with a Dead-Letter Queue (DLQ)
-            # to handle persistent failures.
 
     return {
         "statusCode": 200,

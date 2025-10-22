@@ -139,6 +139,8 @@ resource "aws_lambda_function" "praetorian_guard_lambda" {
   environment {
     variables = {
       LOG_LEVEL = "INFO"
+      # --- Add this line ---
+      CM6_S3_EXECUTION_ROLE_ARN = aws_iam_role.cm6_s3_fix_execution_role.arn
     }
   }
 }
@@ -151,4 +153,56 @@ resource "aws_lambda_event_source_mapping" "sqs_trigger" {
   event_source_arn = var.ksi_engine_sqs_queue_arn
   function_name    = aws_lambda_function.praetorian_guard_lambda.arn
   batch_size       = 1 # Process one failure at a time
+}
+
+# -----------------------------------------------------------------------------
+# GRC-as-Code Playbook Execution Roles
+# -----------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "ssm_assume_role_policy" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ssm.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "cm6_s3_fix_execution_role" {
+  name               = "PraetoriumNexus-CM6-S3-Fix-Role"
+  assume_role_policy = data.aws_iam_policy_document.ssm_assume_role_policy.json
+  tags = merge(var.tags, {
+    "Playbook" = "cm-6_s3_public_access_fix"
+  })
+}
+
+resource "aws_iam_policy" "cm6_s3_fix_policy" {
+  name        = "PraetoriumNexus-CM6-S3-Fix-Policy"
+  description = "Grants *only* the permission to apply S3 public access blocks."
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "s3:PutBucketPublicAccessBlock"
+        Resource = "arn:aws-us-gov:s3:::*" # S3 requires * for this action
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "cm6_s3_fix_attach" {
+  role       = aws_iam_role.cm6_s3_fix_execution_role.name
+  policy_arn = aws_iam_policy.cm6_s3_fix_policy.arn
+}
+
+# -----------------------------------------------------------------------------
+# Terraform Outputs
+# -----------------------------------------------------------------------------
+
+output "cm6_s3_fix_execution_role_arn" {
+  description = "The ARN of the IAM role for the CM-6 SSM playbook."
+  value       = aws_iam_role.cm6_s3_fix_execution_role.arn
 }
